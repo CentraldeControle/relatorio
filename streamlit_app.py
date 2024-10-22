@@ -1,16 +1,9 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import datetime
 import plotly.graph_objs as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 
-import os
-
-st.set_page_config(
-    layout="wide"
-)
+st.set_page_config(layout="wide")
 
 # Função para pré-processamento
 def preprocess_data(data):
@@ -18,172 +11,126 @@ def preprocess_data(data):
     data['Data Filiação'] = pd.to_datetime(data['Data Filiação'], errors='coerce')
     # Remover linhas com datas inválidas
     data = data.dropna(subset=['Data Filiação'])
-    # Converter datas para string no formato 'YYYY-MM-DD'
-    data['Data Filiação'] = data['Data Filiação'].dt.strftime('%Y-%m-%d')
     # Adicionar coluna de quantidade com valor 1
     data['quantidade'] = 1
-    # Agrupar por data de Filiação e franquia e calcular a contagem
-    data = data.groupby(['Data Filiação','Franquia','Promotor de Vendas']).size().reset_index(name='quantidade')
+    # Agrupar por data de Filiação e franquia e somar as quantidades
+    data = data.groupby(['Data Filiação', 'Franquia']).agg({'quantidade': 'sum'}).reset_index()
     
     return data
 
-def main():
-    st.markdown("<h1 style='text-align: center;'>CDT</h1>", unsafe_allow_html=True)
+# Função para gerar gráfico
+def plotar_grafico(dados_agrupados, titulo):
+    cores = ['#007bff', '#ffc107', '#28a745', '#17a2b8', '#ffc885']
+    
+    traces = []
+    franquias_selecionadas = dados_agrupados['Franquia'].unique()
+    
+    for i, franquia in enumerate(franquias_selecionadas):
+        dados_franquia = dados_agrupados[dados_agrupados['Franquia'] == franquia]
+        trace = go.Bar(
+            x=dados_franquia['Data Filiação'],
+            y=dados_franquia['quantidade'],
+            name=franquia,
+            hoverinfo='x+y',
+            marker=dict(color=cores[i % len(cores)]),
+            text=dados_franquia['quantidade'],  # Exibe os valores acima das barras
+            textposition='outside'
+        )
+        traces.append(trace)
 
-    # List all Excel files in the current directory
-    # List all Excel files in the current directory
-    excel_files = [f for f in os.listdir('.') if f.endswith('.xlsx')]
+    layout = go.Layout(
+        title=titulo,
+        xaxis=dict(title='Data'),
+        yaxis=dict(title='Quantidade'),
+    )
 
-    # Initialize an error message and data frames list
-    error_message = ""
-    data_frames = []
+    # Criando a figura
+    fig = go.Figure(data=traces, layout=layout)
+    fig.update_layout(showlegend=True, yaxis=dict(range=[0, dados_agrupados['quantidade'].max() * 1.15]))
+    
+    st.plotly_chart(fig, use_container_width=True, config={
+        'displayModeBar': False,
+        'displaylogo': False
+    })
 
-    if len(excel_files) < 3:
-        error_message = 'Menos de três arquivos Excel encontrados na pasta.'
+# Função para gerar relatório detalhado de comparação entre semanas
+def gerar_relatorio_comparacao(dados_semana_1, dados_semana_2):
+    # Agrupar por franquia e somar as quantidades para cada semana
+    resumo_semana_1 = dados_semana_1.groupby('Franquia')['quantidade'].sum().reset_index().rename(columns={'quantidade': 'Total Semana 1'})
+    resumo_semana_2 = dados_semana_2.groupby('Franquia')['quantidade'].sum().reset_index().rename(columns={'quantidade': 'Total Semana 2'})
+    
+    # Unir os dados das duas semanas
+    comparacao = pd.merge(resumo_semana_1, resumo_semana_2, on='Franquia', how='outer').fillna(0)
+    
+    # Calcular a diferença em termos absolutos e percentuais
+    comparacao['Diferença Absoluta'] = comparacao['Total Semana 2'] - comparacao['Total Semana 1']
+    comparacao['Variação Percentual'] = ((comparacao['Total Semana 2'] - comparacao['Total Semana 1']) / 
+                                         comparacao['Total Semana 1'].replace(0, 1)) * 100
+    
+    # Classificação por total de vendas em cada semana
+    comparacao = comparacao.sort_values(by='Total Semana 2', ascending=False)
+
+    col5, col6 = st.columns(2)
+    with col5:
+    # Exibir o relatório
+        st.markdown("### Relatório de Comparação entre as Semanas por Franquia")
+        st.write(comparacao)
+    
+    # Exibir algumas análises
+    total_semana_1 = comparacao['Total Semana 1'].sum()
+    total_semana_2 = comparacao['Total Semana 2'].sum()
+    st.markdown(f"**Total de vendas na Semana 1:** {int(total_semana_1)}")
+    st.markdown(f"**Total de vendas na Semana 2:** {int(total_semana_2)}")
+    
+    if total_semana_1 > 0:
+        variacao_total = ((total_semana_2 - total_semana_1) / total_semana_1) * 100
+        st.markdown(f"**Variação percentual total:** {variacao_total:.2f}%")
     else:
-        # Sort the files by modification time, descending
-        sorted_files = sorted(excel_files, key=lambda x: os.path.getmtime(x), reverse=True)
-        # Select the three most recent Excel files
-        selected_files = sorted_files[:3]
+        st.markdown(f"**Variação percentual total:** N/A")
+    
+    # Exibir ranking das franquias
+    with col6:
+        st.markdown("### Ranking de Franquias")
+        st.write(comparacao[['Franquia', 'Total Semana 1', 'Total Semana 2', 'Diferença Absoluta', 'Variação Percentual']])
 
-        # Read data from each selected Excel file
-        for file_path in selected_files:
-            try:
-                # Read each Excel file into a DataFrame
-                df = pd.read_excel(file_path)
-                data_frames.append(df)
-            except Exception as e:
-                error_message = f"Failed to read {file_path}: {str(e)}"
+def main():
+    st.markdown("<h1 style='text-align: center;'>CDT - Comparação Semanal</h1>", unsafe_allow_html=True)
 
-    # Comment out to prevent execution
-    # st.write(selected_files)
-    # for df in data_frames:
-    #     print(df.head())  # Display the first few rows of each DataFrame
-    # print(error_message) if error_message else None
+    # Carregar um arquivo Excel
+    uploaded_file = st.file_uploader("Carregue um arquivo Excel", type=["xlsx"])
 
-    if selected_files is not None:
+    if uploaded_file:
         # Ler o arquivo Excel
-        df = pd.read_excel("data.xlsx", header=0)
+        df = pd.read_excel(uploaded_file)
         
         # Pré-processamento dos dados
         processed_data = preprocess_data(df)
         
-        
-        # Adicionando o código de projeção
-        processed_data['Data Filiação'] = pd.to_datetime(processed_data['Data Filiação'])
-        processed_data['mes'] = processed_data['Data Filiação'].dt.month
-
-        df_projec = processed_data.copy()
-        
         # Convertendo a coluna 'Data Filiação' para o tipo datetime
-        df_projec['Data Filiação'] = pd.to_datetime(df_projec['Data Filiação'])
+        processed_data['Data Filiação'] = pd.to_datetime(processed_data['Data Filiação'])
         
-        # Extraindo o mês da coluna 'Data Filiação' e criando uma nova coluna 'Mês'
-  # Mapeando os números dos meses para os nomes em português
-        meses_pt_br = {
-            1: 'Janeiro',
-            2: 'Fevereiro',
-            3: 'Março',
-            4: 'Abril',
-            5: 'Maio',
-            6: 'Junho',
-            7: 'Julho',
-            8: 'Agosto',
-            9: 'Setembro',
-            10: 'Outubro',
-            11: 'Novembro',
-            12: 'Dezembro'
-        }
+        # Calcular a data de duas semanas atrás considerando o dia de ontem
+        hoje = datetime.datetime.now()
+        ontem = hoje - datetime.timedelta(days=1)
+        duas_semanas_atras = ontem - datetime.timedelta(weeks=2)
+        uma_semana_atras = ontem - datetime.timedelta(weeks=1)
         
-        # Calculando o primeiro dia do mês atual
-        hoje = datetime.datetime.now().replace(day=1)
-
-        # Calculando o primeiro dia do mês 3 meses atrás
-        cinco_meses_atras = hoje - relativedelta(months=2)
-
-        # Filtrar os dados para incluir apenas os últimos 3 meses completos
-        df_ultimos_cinco_meses = df_projec[df_projec['Data Filiação'] >= cinco_meses_atras]
-
-        # Adicionando a coluna 'Mês' com os nomes em português
-        df_ultimos_cinco_meses['Mês'] = df_ultimos_cinco_meses['Data Filiação'].dt.month.map(meses_pt_br)
-
-        # Agrupando os dados por franquia e mês, somando a quantidade para cada grupo
-        dados_agrupados = df_ultimos_cinco_meses.groupby(['Franquia', 'Mês'])['quantidade'].sum().reset_index()
-
-        # Definindo a ordem dos meses
-        meses_ordem = [
-            'Janeiro',
-            'Fevereiro',
-            'Março',
-            'Abril',
-            'Maio',
-            'Junho',
-            'Julho',
-            'Agosto',
-            'Setembro',
-            'Outubro',
-            'Novembro',
-            'Dezembro'
-        ]
-
-        # Convertendo a coluna 'Mês' para o tipo categoria com a ordem definida
-        dados_agrupados['Mês'] = pd.Categorical(dados_agrupados['Mês'], categories=meses_ordem, ordered=True)
-
-        # Ordenando os dados pela ordem definida
-        dados_agrupados = dados_agrupados.sort_values(by='Mês')
-
-        # Definindo uma paleta de cores
-        cores = ['#007bff', '#ffc107', '#28a745', '#17a2b8', '#ffc885']
-
-        # Função para criar o gráfico
-        def plotar_grafico(franquias_selecionadas):
-            if not franquias_selecionadas:
-                st.write(" ")
-            else:
-                # Ordenando as franquias selecionadas em ordem alfabética
-                franquias_selecionadas.sort()
-
-                cor_iter = iter(cores * (len(franquias_selecionadas) // len(cores) + 1))
-
-                traces = []
-                for franquia in franquias_selecionadas:
-                    dados_franquia = dados_agrupados[dados_agrupados['Franquia'] == franquia]
-                    trace = go.Bar(
-                        x=dados_franquia['Mês'],
-                        y=dados_franquia['quantidade'],
-                        name=franquia,
-                        hoverinfo='x+y',
-                        text=dados_franquia['quantidade'],
-                        textposition='outside',
-                        marker=dict(color=next(cor_iter))
-                    )
-                    traces.append(trace)
-
-                # Criando o layout do gráfico
-                layout = go.Layout(
-                    title='Vendas de cada franquia nos últimos 3 meses completos',
-                    xaxis=dict(title='Mês'),
-                    yaxis=dict(title='Quantidade'),
-                )
-
-                # Criando a figura
-                fig = go.Figure(data=traces, layout=layout)
-                fig.update_layout(showlegend=True, yaxis=dict(range=[0, dados_agrupados['quantidade'].max() * 1.15]))
-
-                # Exibindo o gráfico
-                st.plotly_chart(fig, use_container_width=True, config={
-                    'displayModeBar': False,
-                    'displaylogo': False
-                })
-
-        # Lista de franquias disponíveis
-        franquias_disponiveis = dados_agrupados['Franquia'].unique()
-
-        # Checkbox para selecionar as franquias
-        franquias_selecionadas = st.sidebar.multiselect('Selecione as franquias para visualizar as vendas nos últimos 3 meses completos', franquias_disponiveis, default=franquias_disponiveis)
-
-        plotar_grafico(franquias_selecionadas)
-
+        # Filtrar dados das duas últimas semanas a partir de ontem
+        dados_semana_1 = processed_data[(processed_data['Data Filiação'] >= duas_semanas_atras) & 
+                                        (processed_data['Data Filiação'] < uma_semana_atras)]
+        
+        dados_semana_2 = processed_data[(processed_data['Data Filiação'] >= uma_semana_atras) & 
+                                        (processed_data['Data Filiação'] <= ontem)]
+        
+        # Exibir gráficos lado a lado
+        col3, col4 = st.columns(2)
+        with col3:
+            plotar_grafico(dados_semana_1, "Vendas na Semana 1 (A partir de Ontem)")
+        with col4:
+            plotar_grafico(dados_semana_2, "Vendas na Semana 2 (A partir de Ontem)")
+        
+        # Gerar e exibir o relatório de comparação detalhado
+        gerar_relatorio_comparacao(dados_semana_1, dados_semana_2)
 
 if __name__ == "__main__":
     main()
