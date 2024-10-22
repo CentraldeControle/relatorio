@@ -1,0 +1,9 @@
+pandas
+datetime
+timedelta
+streamlit
+plotly
+openpyxl
+matplotlib
+pillow
+torchvision
